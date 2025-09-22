@@ -134,7 +134,8 @@ def assistant_recently_asked_for_details(session_id: str) -> bool:
     if not row:
         return False
     txt = row[0].lower()
-    return ("sipariş numaranız" in txt or "sipariş numarasını" in txt) and ("sebep" in txt)
+    # Yeni format: "sipariş numaranızı ve iptal nedeninizi paylaşırsanız" kontrolü
+    return ("sipariş numaranız" in txt or "sipariş numarasını" in txt) and ("iptal nedenini" in txt or "sebep" in txt)
 
 # ==============================
 # Tool: Call Order API
@@ -188,19 +189,18 @@ def chat_endpoint(req: ChatRequest):
     ensure_session(req.session_id)
     save_message(req.session_id, "user", req.message)
 
-    # ---- Tool Calling ÖNCELİKLE ----
-    # 1) Eğer mesajdan hem sipariş no hem sebep çıkıyorsa → direkt order_api çağır.
+    # ---- Tool Calling: Sipariş İptal İşlemi ----
     order_number, reason = extract_order_and_reason(req.message)
-    if order_number and reason:
+    
+    # 1) Eğer önceki asistan iptal bilgilerini istemişse ve şimdi bilgiler geliyorsa → direkt iptal et
+    if assistant_recently_asked_for_details(req.session_id) and order_number and reason:
         result = call_order_api(order_number, reason)
         save_action(req.session_id, "cancel_order", {"order_number": order_number, "reason": reason}, result)
         save_message(req.session_id, "assistant", result)
         return ChatResponse(answer=result, sources=[])
-
-    # 2) Eğer bu mesajda iptal niyeti varsa veya önceki asistan bu bilgileri istemişse → eksik alanı sor.
-    msg_lower = req.message.lower()
-    cancel_intent = ("iptal" in msg_lower) or ("iade" in msg_lower) or assistant_recently_asked_for_details(req.session_id)
-    if cancel_intent:
+    
+    # 2) Eğer önceki asistan iptal bilgilerini istemişse ve hala eksik bilgi varsa → tekrar sor
+    if assistant_recently_asked_for_details(req.session_id):
         missing = []
         if not order_number:
             missing.append("sipariş numarası")
@@ -212,7 +212,7 @@ def chat_endpoint(req: ChatRequest):
             save_message(req.session_id, "assistant", answer)
             return ChatResponse(answer=answer, sources=[])
 
-    # ---- Normal RAG Akışı ----
+    # ---- RAG Akışı ile Yanıt Oluştur ----
     history = get_session_history(req.session_id)
     context_messages = "\n".join([f"{h['role']}: {h['content']}" for h in history])
 
@@ -237,5 +237,13 @@ Cevabını sadece Türkçe ver.
     response = chat_model.invoke(prompt)
     answer = response.content if hasattr(response, "content") else str(response)
 
+    # ---- İptal Niyeti Kontrolü ve Ek Teklif ----
+    msg_lower = req.message.lower()
+    cancel_intent = ("iptal" in msg_lower) or ("iade" in msg_lower)
+    
+    if cancel_intent:
+        # RAG yanıtına iptal teklifi ekle
+        answer += "\n\nEğer isterseniz buradan sipariş numaranızı ve iptal nedeninizi paylaşırsanız, ben de iptal işleminizi gerçekleştirebilirim."
+    
     save_message(req.session_id, "assistant", answer)
     return ChatResponse(answer=answer, sources=sources)
