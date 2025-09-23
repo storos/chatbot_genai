@@ -129,6 +129,21 @@ docker run -d --name chatbot-pgadmin \
   dpage/pgadmin4
 ```
 
+#### 4. Ingest Script (Database Initialization)
+```bash
+# Build ingest image
+docker build -t chatbot-ingest ./ingest
+
+# Run ingest script (one-time execution)
+docker run --rm \
+  -e OPENAI_API_KEY="your_openai_api_key_here" \
+  -e DATABASE_URL="postgresql+psycopg://postgres:postgres@host.docker.internal:5432/chatbot" \
+  -v "$(pwd)/docs:/docs" \
+  chatbot-ingest
+
+# Note: This container runs once and exits after completing the data ingestion
+```
+
 ### Service URLs
 - **Chat API**: http://localhost:8001
 - **Order API**: http://localhost:9000  
@@ -150,6 +165,21 @@ docker exec -i chatbot_db psql -U postgres -d chatbot < database/init_schema.sql
 ```
 
 #### 2. Load Knowledge Base (PDF Documents)
+
+**Option A: Using Docker (Recommended)**
+```bash
+# Build ingest container
+docker build -t chatbot-ingest ./ingest
+
+# Run ingest script with volume mount for PDF access
+docker run --rm \
+  -e OPENAI_API_KEY="your_openai_api_key_here" \
+  -e DATABASE_URL="postgresql+psycopg://postgres:postgres@host.docker.internal:5432/chatbot" \
+  -v "$(pwd)/docs:/docs" \
+  chatbot-ingest
+```
+
+**Option B: Using Python directly**
 ```bash
 # Set environment variables for ingest script
 export OPENAI_API_KEY="your_openai_api_key_here"

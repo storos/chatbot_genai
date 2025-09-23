@@ -215,51 +215,17 @@ def chat_endpoint(req: ChatRequest):
         sources = [f"{r.metadata.get('source', 'unknown')} - chunk {r.metadata.get('chunk', 'N/A')}" for r in results]
         
         if not docs_text.strip():
-            # If no relevant docs found, use knowledge base
-            docs_text = """
-            Müşteri Hizmetleri Bilgi Bankası:
-            
-            1. Sipariş Takibi:
-            - Hesabım > Siparişlerim bölümünden takip edebilirsiniz
-            - Kargo takibi için sipariş detayına giriniz
-            
-            2. İptal İşlemleri:
-            - Sipariş iptal etmek için sipariş numaranız ve sebep belirtmeniz gerekir
-            - İptal edilebilir siparişler: Henüz kargoya verilmemiş siparişler
-            
-            3. İade İşlemleri:
-            - Hesabım > Siparişlerim > İade Et bölümünden yapabilirsiniz
-            - İade süresi: Teslimat tarihinden itibaren 14 gün
-            
-            4. Teslimat Sorunları:
-            - Teslimat gecikmesi için Müşteri Hizmetleri ile iletişime geçin
-            - Hasarlı ürün teslimatı durumunda fotoğraf ile bildirim yapın
-            """
-            sources = ["knowledge_base"]
+            # If no relevant docs found, return error message
+            error_msg = "⚠️ Üzgünüm, şu anda sistem bilgi bankasında veri bulunmuyor. Lütfen daha sonra tekrar deneyin veya müşteri hizmetleri ile iletişime geçin."
+            save_message(req.session_id, "assistant", error_msg)
+            return ChatResponse(answer=error_msg, sources=[])
             
     except Exception as e:
         print(f"Vector search error: {e}")
-        # Fallback to knowledge base
-        docs_text = """
-        Müşteri Hizmetleri Bilgi Bankası:
-        
-        1. Sipariş Takibi:
-        - Hesabım > Siparişlerim bölümünden takip edebilirsiniz
-        - Kargo takibi için sipariş detayına giriniz
-        
-        2. İptal İşlemleri:
-        - Sipariş iptal etmek için sipariş numaranız ve sebep belirtmeniz gerekir
-        - İptal edilebilir siparişler: Henüz kargoya verilmemiş siparişler
-        
-        3. İade İşlemleri:
-        - Hesabım > Siparişlerim > İade Et bölümünden yapabilirsiniz
-        - İade süresi: Teslimat tarihinden itibaren 14 gün
-        
-        4. Teslimat Sorunları:
-        - Teslimat gecikmesi için Müşteri Hizmetleri ile iletişime geçin
-        - Hasarlı ürün teslimatı durumunda fotoğraf ile bildirim yapın
-        """
-        sources = ["knowledge_base"]
+        # Return error message for database issues
+        error_msg = "⚠️ Üzgünüm, şu anda sistem veritabanına erişimde sorun yaşanıyor. Lütfen daha sonra tekrar deneyin veya müşteri hizmetleri ile iletişime geçin."
+        save_message(req.session_id, "assistant", error_msg)
+        return ChatResponse(answer=error_msg, sources=[])
 
     prompt = f"""
 Sen bir müşteri destek asistanısın. Türkçe yanıt ver.
