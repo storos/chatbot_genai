@@ -1,0 +1,23 @@
+INFO:     Started server process [90650]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:53399 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53411 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53422 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53431 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53467 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53476 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53487 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53494 - "POST /chat HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:53500 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53508 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53522 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53534 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53544 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53556 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53706 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53714 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53723 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53734 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53741 - "POST /chat HTTP/1.1" 200 OK

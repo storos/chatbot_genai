@@ -5,8 +5,8 @@ from langchain_postgres import PGVector
 import os
 
 def ingest_pdf():
-    # PDF yükle
-    loader = PyPDFLoader("./docs/Chatbot_SSS.pdf")
+    # PDF yükle - root'daki docs klasöründen
+    loader = PyPDFLoader("../docs/Chatbot_SSS.pdf")
     docs = loader.load()
 
     # Chunk'lara ayır
@@ -25,7 +25,7 @@ def ingest_pdf():
         "postgresql+psycopg://postgres:postgres@localhost:5432/chatbot"
     )
 
-    # Yeni collection’a kaydet
+    # Yeni collection'a kaydet
     PGVector.from_documents(
         documents=docs,
         embedding=embeddings,

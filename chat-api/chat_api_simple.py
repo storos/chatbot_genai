@@ -6,9 +6,9 @@ import psycopg
 import requests
 from psycopg.types.json import Json
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_postgres import PGVector
+from langchain_openai import ChatOpenAI
 
 # ==============================
 # Environment Checks
@@ -39,18 +39,20 @@ except Exception as e:
 # LangChain Setup
 # ==============================
 chat_model = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=OPENAI_API_KEY)
-embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
-vectorstore = PGVector(
-    connection=DATABASE_URL,
-    embeddings=embeddings,
-    collection_name="chatbot_docs",
-    use_jsonb=True,
-)
 
 # ==============================
 # FastAPI App
 # ==============================
 app = FastAPI(title="Chat API with Memory & Tool Calling")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ==============================
 # Schemas
@@ -81,32 +83,11 @@ def save_message(session_id: str, role: str, content: str):
             (session_id, role, content),
         )
 
-_ACTION_COL_CACHE = None
-def _detect_action_column() -> str:
-    global _ACTION_COL_CACHE
-    if _ACTION_COL_CACHE:
-        return _ACTION_COL_CACHE
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name = 'chat_actions'
-        """)
-        cols = {r[0] for r in cur.fetchall()}
-    # tercih sırası
-    for name in ("action_name", "action", "tool_name"):
-        if name in cols:
-            _ACTION_COL_CACHE = name
-            return name
-    # hiçbiri yoksa varsayılan
-    _ACTION_COL_CACHE = "action_name"
-    return _ACTION_COL_CACHE
-
 def save_action(session_id: str, action_name: str, args: dict, result: str):
     ensure_session(session_id)
-    col = _detect_action_column()
     with conn.cursor() as cur:
         cur.execute(
-            f"INSERT INTO chat_actions (session_id, {col}, args, result) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO chat_actions (session_id, action_name, args, result) VALUES (%s, %s, %s, %s)",
             (session_id, action_name, Json(args), result),
         )
 
@@ -134,7 +115,6 @@ def assistant_recently_asked_for_details(session_id: str) -> bool:
     if not row:
         return False
     txt = row[0].lower()
-    # Yeni format: "sipariş numaranızı ve iptal nedeninizi paylaşırsanız" kontrolü
     return ("sipariş numaranız" in txt or "sipariş numarasını" in txt) and ("iptal nedenini" in txt or "sebep" in txt)
 
 # ==============================
@@ -157,29 +137,32 @@ def call_order_api(order_number: str, reason: str) -> str:
 # Parsing helpers
 # ==============================
 def extract_order_and_reason(message: str):
-    """
-    - order_number: ilk 3+ basamaklı sayı
-    - reason: 'sebep' sözcüğünden sonrası (':' veya '-' opsiyonel)
-    """
     order_number = None
     reason = None
 
-    m_num = re.search(r"\b\d{3,}\b", message)
+    # ORD-12345 formatı veya sadece rakam
+    m_num = re.search(r"(ORD[-]?\d+|\b\d{3,}\b)", message, re.IGNORECASE)
     if m_num:
         order_number = m_num.group()
 
+    # Sebep patterns
     m_reason = re.search(r"sebep[:\-]?\s*(.*)", message, re.IGNORECASE)
     if m_reason:
         reason = m_reason.group(1).strip()
-
-    # reason yoksa bazı kısa varyantlar
-    if not reason:
-        # ör: “ürün hasarlı”, “ürün bozuk” gibi tek cümlelik mesajlar
-        m_alt = re.search(r"(hasarlı|bozuk|iade|yanlış|defolu|beğenmedim|uygun değil)", message, re.IGNORECASE)
+    else:
+        # Diğer sebep ifadeleri
+        m_alt = re.search(r"(hasarlı|bozuk|iade|yanlış|defolu|beğenmedim|uygun değil|fikrim değişti|fikir değiştirdim|istemiyorum|artık gerek yok)", message, re.IGNORECASE)
         if m_alt:
             reason = m_alt.group(1)
 
     return order_number, reason
+
+# ==============================
+# Health Check
+# ==============================
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 # ==============================
 # Chat Endpoint
@@ -212,16 +195,33 @@ def chat_endpoint(req: ChatRequest):
             save_message(req.session_id, "assistant", answer)
             return ChatResponse(answer=answer, sources=[])
 
-    # ---- RAG Akışı ile Yanıt Oluştur ----
+    # ---- Basit Chat Yanıtı (RAG olmadan) ----
     history = get_session_history(req.session_id)
     context_messages = "\n".join([f"{h['role']}: {h['content']}" for h in history])
 
-    results = vectorstore.similarity_search(req.message, k=4)
-    docs_text = "\n".join([r.page_content for r in results])
-    sources = [f"{r.metadata.get('source')} - chunk {r.metadata.get('chunk')}" for r in results]
+    # Basit bilgi bankası
+    knowledge_base = """
+    Müşteri Hizmetleri Bilgi Bankası:
+    
+    1. Sipariş Takibi:
+    - Hesabım > Siparişlerim bölümünden takip edebilirsiniz
+    - Kargo takibi için sipariş detayına giriniz
+    
+    2. İptal İşlemleri:
+    - Sipariş iptal etmek için sipariş numaranız ve sebep belirtmeniz gerekir
+    - İptal edilebilir siparişler: Henüz kargoya verilmemiş siparişler
+    
+    3. İade İşlemleri:
+    - Hesabım > Siparişlerim > İade Et bölümünden yapabilirsiniz
+    - İade süresi: Teslimat tarihinden itibaren 14 gün
+    
+    4. Teslimat Sorunları:
+    - Teslimat gecikmesi için Müşteri Hizmetleri ile iletişime geçin
+    - Hasarlı ürün teslimatı durumunda fotoğraf ile bildirim yapın
+    """
 
     prompt = f"""
-Sen bir müşteri destek asistanısın.
+Sen bir müşteri destek asistanısın. Türkçe yanıt ver.
 
 Geçmiş konuşma:
 {context_messages}
@@ -229,11 +229,12 @@ Geçmiş konuşma:
 Kullanıcının yeni mesajı:
 {req.message}
 
-İlgili dökümanlardan bilgiler:
-{docs_text}
+Bilgi bankası:
+{knowledge_base}
 
-Cevabını sadece Türkçe ver.
+Cevabını sadece Türkçe ver ve yardımcı ol.
 """
+    
     response = chat_model.invoke(prompt)
     answer = response.content if hasattr(response, "content") else str(response)
 
@@ -242,8 +243,11 @@ Cevabını sadece Türkçe ver.
     cancel_intent = ("iptal" in msg_lower) or ("iade" in msg_lower)
     
     if cancel_intent:
-        # RAG yanıtına iptal teklifi ekle
         answer += "\n\nEğer isterseniz buradan sipariş numaranızı ve iptal nedeninizi paylaşırsanız, ben de iptal işleminizi gerçekleştirebilirim."
     
     save_message(req.session_id, "assistant", answer)
-    return ChatResponse(answer=answer, sources=sources)
+    return ChatResponse(answer=answer, sources=["knowledge_base"])
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001)
