@@ -50,7 +50,7 @@ app = FastAPI(title="Chat API with Memory & Tool Calling")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -85,12 +85,33 @@ def save_message(session_id: str, role: str, content: str):
             (session_id, role, content),
         )
 
+_ACTION_COL_CACHE = None
+def _detect_action_column() -> str:
+    global _ACTION_COL_CACHE
+    if _ACTION_COL_CACHE:
+        return _ACTION_COL_CACHE
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'chat_actions'
+        """)
+        cols = {r[0] for r in cur.fetchall()}
+    # tercih sırası
+    for name in ("action_name", "action", "tool_name"):
+        if name in cols:
+            _ACTION_COL_CACHE = name
+            return name
+    # hiçbiri yoksa varsayılan
+    _ACTION_COL_CACHE = "action_name"
+    return _ACTION_COL_CACHE
+
 def save_action(session_id: str, action_name: str, args: dict, result: str):
     ensure_session(session_id)
+    col = _detect_action_column()
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO chat_actions (session_id, action_name, args, result) VALUES (%s, %s, %s, %s)",
-            (session_id, action_name, Json(args), result),
+            f"INSERT INTO chat_actions (session_id, {col}, args, result) VALUES (%s, %s, %s, %s)",
+            (session_id, action_name, json.dumps(args), result),
         )
 
 def get_session_history(session_id: str):
@@ -117,6 +138,7 @@ def assistant_recently_asked_for_details(session_id: str) -> bool:
     if not row:
         return False
     txt = row[0].lower()
+    # Yeni format: "sipariş numaranızı ve iptal nedeninizi paylaşırsanız" kontrolü
     return ("sipariş numaranız" in txt or "sipariş numarasını" in txt) and ("iptal nedenini" in txt or "sebep" in txt)
 
 # ==============================
@@ -139,32 +161,29 @@ def call_order_api(order_number: str, reason: str) -> str:
 # Parsing helpers
 # ==============================
 def extract_order_and_reason(message: str):
+    """
+    - order_number: ilk 3+ basamaklı sayı
+    - reason: 'sebep' sözcüğünden sonrası (':' veya '-' opsiyonel)
+    """
     order_number = None
     reason = None
 
-    # ORD-12345 formatı veya sadece rakam
-    m_num = re.search(r"(ORD[-]?\d+|\b\d{3,}\b)", message, re.IGNORECASE)
+    m_num = re.search(r"\b\d{3,}\b", message)
     if m_num:
         order_number = m_num.group()
 
-    # Sebep patterns
     m_reason = re.search(r"sebep[:\-]?\s*(.*)", message, re.IGNORECASE)
     if m_reason:
         reason = m_reason.group(1).strip()
-    else:
-        # Diğer sebep ifadeleri
-        m_alt = re.search(r"(hasarlı|bozuk|iade|yanlış|defolu|beğenmedim|uygun değil|fikrim değişti|fikir değiştirdim|istemiyorum|artık gerek yok)", message, re.IGNORECASE)
+
+    # reason yoksa bazı kısa varyantlar
+    if not reason:
+        # ör: “ürün hasarlı”, “ürün bozuk” gibi tek cümlelik mesajlar
+        m_alt = re.search(r"(hasarlı|bozuk|iade|yanlış|defolu|beğenmedim|uygun değil)", message, re.IGNORECASE)
         if m_alt:
             reason = m_alt.group(1)
 
     return order_number, reason
-
-# ==============================
-# Health Check
-# ==============================
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
 
 # ==============================
 # Chat Endpoint
@@ -197,72 +216,28 @@ def chat_endpoint(req: ChatRequest):
             save_message(req.session_id, "assistant", answer)
             return ChatResponse(answer=answer, sources=[])
 
-    # ---- Vector Database RAG ----
+    # ---- RAG Akışı ile Yanıt Oluştur ----
     history = get_session_history(req.session_id)
     context_messages = "\n".join([f"{h['role']}: {h['content']}" for h in history])
 
-    # Try vector search first, fallback to knowledge base
+    # Create vectorstore connection dynamically
     try:
-        # Initialize PGVector with proper parameters
         vectorstore = PGVector(
-            embeddings=embeddings,
             connection=DATABASE_URL,
+            embeddings=embeddings,
             collection_name="chatbot_docs",
             use_jsonb=True,
         )
         results = vectorstore.similarity_search(req.message, k=4)
         docs_text = "\n".join([r.page_content for r in results])
-        sources = [f"{r.metadata.get('source', 'unknown')} - chunk {r.metadata.get('chunk', 'N/A')}" for r in results]
-        
-        if not docs_text.strip():
-            # If no relevant docs found, use knowledge base
-            docs_text = """
-            Müşteri Hizmetleri Bilgi Bankası:
-            
-            1. Sipariş Takibi:
-            - Hesabım > Siparişlerim bölümünden takip edebilirsiniz
-            - Kargo takibi için sipariş detayına giriniz
-            
-            2. İptal İşlemleri:
-            - Sipariş iptal etmek için sipariş numaranız ve sebep belirtmeniz gerekir
-            - İptal edilebilir siparişler: Henüz kargoya verilmemiş siparişler
-            
-            3. İade İşlemleri:
-            - Hesabım > Siparişlerim > İade Et bölümünden yapabilirsiniz
-            - İade süresi: Teslimat tarihinden itibaren 14 gün
-            
-            4. Teslimat Sorunları:
-            - Teslimat gecikmesi için Müşteri Hizmetleri ile iletişime geçin
-            - Hasarlı ürün teslimatı durumunda fotoğraf ile bildirim yapın
-            """
-            sources = ["knowledge_base"]
-            
+        sources = [f"{r.metadata.get('source')} - chunk {r.metadata.get('chunk')}" for r in results]
     except Exception as e:
         print(f"Vector search error: {e}")
-        # Fallback to knowledge base
-        docs_text = """
-        Müşteri Hizmetleri Bilgi Bankası:
-        
-        1. Sipariş Takibi:
-        - Hesabım > Siparişlerim bölümünden takip edebilirsiniz
-        - Kargo takibi için sipariş detayına giriniz
-        
-        2. İptal İşlemleri:
-        - Sipariş iptal etmek için sipariş numaranız ve sebep belirtmeniz gerekir
-        - İptal edilebilir siparişler: Henüz kargoya verilmemiş siparişler
-        
-        3. İade İşlemleri:
-        - Hesabım > Siparişlerim > İade Et bölümünden yapabilirsiniz
-        - İade süresi: Teslimat tarihinden itibaren 14 gün
-        
-        4. Teslimat Sorunları:
-        - Teslimat gecikmesi için Müşteri Hizmetleri ile iletişime geçin
-        - Hasarlı ürün teslimatı durumunda fotoğraf ile bildirim yapın
-        """
-        sources = ["knowledge_base"]
+        docs_text = ""
+        sources = []
 
     prompt = f"""
-Sen bir müşteri destek asistanısın. Türkçe yanıt ver.
+Sen bir müşteri destek asistanısın.
 
 Geçmiş konuşma:
 {context_messages}
@@ -273,9 +248,8 @@ Kullanıcının yeni mesajı:
 İlgili dökümanlardan bilgiler:
 {docs_text}
 
-Cevabını sadece Türkçe ver ve yardımcı ol.
+Cevabını sadece Türkçe ver.
 """
-    
     response = chat_model.invoke(prompt)
     answer = response.content if hasattr(response, "content") else str(response)
 
@@ -284,11 +258,20 @@ Cevabını sadece Türkçe ver ve yardımcı ol.
     cancel_intent = ("iptal" in msg_lower) or ("iade" in msg_lower)
     
     if cancel_intent:
+        # RAG yanıtına iptal teklifi ekle
         answer += "\n\nEğer isterseniz buradan sipariş numaranızı ve iptal nedeninizi paylaşırsanız, ben de iptal işleminizi gerçekleştirebilirim."
     
     save_message(req.session_id, "assistant", answer)
     return ChatResponse(answer=answer, sources=sources)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+# ==============================
+# Health Check Endpoint
+# ==============================
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "service": "chat_api"}
+
+# CORS preflight endpoint
+@app.options("/chat")
+def chat_options():
+    return {"message": "OK"}
