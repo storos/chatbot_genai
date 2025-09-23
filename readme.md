@@ -49,6 +49,106 @@ A sophisticated customer support chatbot system that combines natural language p
 - **Requests**: HTTP library for API integrations
 - **Regular Expressions**: Pattern matching for information extraction
 
+## 🐳 Docker Setup & Deployment
+
+### Prerequisites
+- Docker and Docker Compose installed
+- OpenAI API key
+
+### Environment Variables
+Create a `.env` file in the root directory:
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+### Full System Deployment
+Start all services with Docker Compose:
+```bash
+# Start all services (PostgreSQL + PgAdmin + Chat API + Order API)
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+
+# Stop all services
+docker-compose down
+```
+
+### Individual Service Deployment
+
+#### 1. Order API Only
+```bash
+# Build and run Order API
+docker build -t chatbot-order-api ./order-api
+docker run -d --name order-api -p 9000:9000 chatbot-order-api
+
+# Test Order API
+curl -X POST "http://localhost:9000/cancel" \
+  -H "Content-Type: application/json" \
+  -d '{"order_number": "ORD-12345", "reason": "Changed mind"}'
+```
+
+#### 2. Chat API Only (requires database)
+```bash
+# Start PostgreSQL first
+docker run -d --name postgres-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=chatbot \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+
+# Build and run Chat API
+docker build -t chatbot-chat-api ./chat-api
+docker run -d --name chat-api \
+  -p 8001:8001 \
+  -e OPENAI_API_KEY="your_openai_api_key_here" \
+  -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/chatbot" \
+  -e ORDER_API_URL="http://host.docker.internal:9000/cancel" \
+  chatbot-chat-api
+
+# Test Chat API
+curl -X POST "http://localhost:8001/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "test123", "message": "Merhaba, nasılsınız?"}'
+```
+
+#### 3. Database Only
+```bash
+# PostgreSQL with PGVector
+docker run -d --name chatbot-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=chatbot \
+  -p 5432:5432 \
+  -v chatbot_db_data:/var/lib/postgresql/data \
+  pgvector/pgvector:pg16
+
+# PgAdmin (optional)
+docker run -d --name chatbot-pgadmin \
+  -e PGADMIN_DEFAULT_EMAIL=admin@admin.com \
+  -e PGADMIN_DEFAULT_PASSWORD=admin \
+  -p 5050:80 \
+  dpage/pgadmin4
+```
+
+### Service URLs
+- **Chat API**: http://localhost:8001
+- **Order API**: http://localhost:9000  
+- **PostgreSQL**: localhost:5432
+- **PgAdmin**: http://localhost:5050
+
+### Database Setup
+After starting PostgreSQL, initialize the database schema:
+```bash
+# Run ingest script to create tables and load PDF data
+cd ingest
+python3 ingest.py
+```
+
 ## 📋 Installation & Setup
 
 ### Prerequisites

@@ -25,5 +25,26 @@ services:
     depends_on:
       - db
 
+  chat-api:
+    build: ./chat-api
+    container_name: chatbot_chat_api
+    restart: always
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/chatbot
+      ORDER_API_URL: http://order-api:9000/cancel
+    ports:
+      - "8001:8001"
+    depends_on:
+      - db
+      - order-api
+
+  order-api:
+    build: ./order-api
+    container_name: chatbot_order_api
+    restart: always
+    ports:
+      - "9000:9000"
+
 volumes:
   db_data:
