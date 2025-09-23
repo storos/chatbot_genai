@@ -149,13 +149,46 @@ curl -X POST "http://localhost:8001/chat" \
   -d '{"session_id": "test123", "message": "Merhaba, nasılsınız?"}'
 ```
 
+#### 6. Chat UI (Frontend)
+```bash
+# Build and run Chat UI
+docker build -t chatbot-chat-ui ./chat-ui
+docker run -d --name chatbot-chat-ui \
+  -p 3000:3000 \
+  -e VITE_CHAT_API_URL="http://localhost:8001" \
+  chatbot-chat-ui
+
+# Access the web interface
+open http://localhost:3000
+```
+
 ### Service URLs
+- **Chat UI (Frontend)**: http://localhost:3000
 - **Chat API**: http://localhost:8001
 - **Order API**: http://localhost:9000  
 - **PostgreSQL**: localhost:5432
 - **PgAdmin**: http://localhost:5050
 
 **⚠️ Important**: The Chat API **requires** both the database schema and PDF data to be loaded for full functionality including RAG (Retrieval Augmented Generation).
+
+## 🎨 Web User Interface
+
+### Features
+- **Modern React Frontend**: Built with React 18, TypeScript, and Tailwind CSS
+- **Real-time Chat Interface**: Interactive messaging with conversation history
+- **Responsive Design**: Works seamlessly on desktop and mobile devices
+- **Session Management**: Persistent conversations with unique session identifiers
+- **Connection Status**: Visual indicators for API connectivity
+- **Error Handling**: Graceful error states and user feedback
+
+### Quick Start
+```bash
+# Start all services including the web UI
+docker-compose up -d
+
+# Access the chat interface
+open http://localhost:3000
+```
 
 ## 🔗 API Usage
 

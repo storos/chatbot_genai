@@ -46,5 +46,16 @@ services:
     ports:
       - "9000:9000"
 
+  chat-ui:
+    build: ./chat-ui
+    container_name: chatbot_chat_ui
+    restart: always
+    environment:
+      VITE_CHAT_API_URL: http://localhost:8001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - chat-api
+
 volumes:
   db_data:

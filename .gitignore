@@ -143,3 +143,4 @@ cython_debug/
 *.log
 nohup.out
 apikey.txt
+chat-ui/node_modules/
