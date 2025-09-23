@@ -141,13 +141,44 @@ docker run -d --name chatbot-pgadmin \
 - **PostgreSQL**: localhost:5432
 - **PgAdmin**: http://localhost:5050
 
-### Database Setup
-After starting PostgreSQL, initialize the database schema:
+### Database Setup & Initialization
+
+After starting PostgreSQL, you **must** initialize the database schema and load the knowledge base:
+
+#### 1. Create Database Schema
 ```bash
-# Run ingest script to create tables and load PDF data
+# First, create required tables using the initialization script
+cd database
+psql -h localhost -p 5432 -U postgres -d chatbot -f init_schema.sql
+
+# Or if you have PostgreSQL client installed via Docker:
+docker exec -i chatbot_db psql -U postgres -d chatbot < database/init_schema.sql
+```
+
+#### 2. Load Knowledge Base (PDF Documents)
+```bash
+# Set environment variables for ingest script
+export OPENAI_API_KEY="your_openai_api_key_here"
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/chatbot"
+
+# Run ingest script to load PDF data into vector database
 cd ingest
 python3 ingest.py
 ```
+
+#### 3. Verify Database Setup
+```bash
+# Connect to database and verify tables
+psql -h localhost -p 5432 -U postgres -d chatbot
+
+# Check if tables are created
+\dt
+
+# Check if vector data is loaded
+SELECT COUNT(*) FROM langchain_pg_embedding;
+```
+
+**⚠️ Important**: The Chat API **requires** both the database schema and PDF data to be loaded for full functionality including RAG (Retrieval Augmented Generation).
 
 ## 📋 Installation & Setup
 
