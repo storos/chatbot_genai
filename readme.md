@@ -93,13 +93,7 @@ curl -X POST "http://localhost:9000/cancel" \
 
 #### 2. Chat API Only (requires database)
 ```bash
-# Start PostgreSQL first
-docker run -d --name postgres-db \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=chatbot \
-  -p 5432:5432 \
-  pgvector/pgvector:pg16
+# Note: PostgreSQL database must be running first (see "Database Only" section below)
 
 # Build and run Chat API
 docker build -t chatbot-chat-api ./chat-api
