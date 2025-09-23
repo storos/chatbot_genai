@@ -23,7 +23,7 @@ A sophisticated customer support chatbot system that combines natural language p
 ### 💬 Enhanced Customer Experience
 - **Hybrid Responses**: Combines knowledge base information with actionable order management
 - **Proactive Assistance**: Offers order cancellation services when cancellation intent is detected
-- **Graceful Degradation**: Falls back to general support when specific actions aren't applicable
+- **Database-dependent**: Returns clear error messages when data is unavailable, ensuring transparency
 
 ## 🛠️ Tech Stack
 
@@ -49,11 +49,12 @@ A sophisticated customer support chatbot system that combines natural language p
 - **Requests**: HTTP library for API integrations
 - **Regular Expressions**: Pattern matching for information extraction
 
-## 🐳 Docker Setup & Deployment
+## � Installation & Setup
 
 ### Prerequisites
 - Docker and Docker Compose installed
 - OpenAI API key
+- Python 3.8+ (for local development)
 
 ### Environment Variables
 Create a `.env` file in the root directory:
@@ -61,8 +62,9 @@ Create a `.env` file in the root directory:
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-### Full System Deployment
-Start all services with Docker Compose:
+## 🐳 Docker Deployment (Recommended)
+
+### Option 1: Full System with Docker Compose
 ```bash
 # Start all services (PostgreSQL + PgAdmin + Chat API + Order API)
 docker-compose up -d
@@ -77,40 +79,9 @@ docker-compose logs -f
 docker-compose down
 ```
 
-### Individual Service Deployment
+### Option 2: Individual Service Deployment
 
-#### 1. Order API Only
-```bash
-# Build and run Order API
-docker build -t chatbot-order-api ./order-api
-docker run -d --name order-api -p 9000:9000 chatbot-order-api
-
-# Test Order API
-curl -X POST "http://localhost:9000/cancel" \
-  -H "Content-Type: application/json" \
-  -d '{"order_number": "ORD-12345", "reason": "Changed mind"}'
-```
-
-#### 2. Chat API Only (requires database)
-```bash
-# Note: PostgreSQL database must be running first (see "Database Only" section below)
-
-# Build and run Chat API
-docker build -t chatbot-chat-api ./chat-api
-docker run -d --name chat-api \
-  -p 8001:8001 \
-  -e OPENAI_API_KEY="your_openai_api_key_here" \
-  -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/chatbot" \
-  -e ORDER_API_URL="http://host.docker.internal:9000/cancel" \
-  chatbot-chat-api
-
-# Test Chat API
-curl -X POST "http://localhost:8001/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "test123", "message": "Merhaba, nasılsınız?"}'
-```
-
-#### 3. Database Only
+#### 1. Database Setup
 ```bash
 # PostgreSQL with PGVector
 docker run -d --name chatbot-db \
@@ -123,15 +94,21 @@ docker run -d --name chatbot-db \
 
 # PgAdmin (optional)
 docker run -d --name chatbot-pgadmin \
-  -e PGADMIN_DEFAULT_EMAIL=admin@admin.com \
+  -e PGLADMIN_DEFAULT_EMAIL=admin@admin.com \
   -e PGADMIN_DEFAULT_PASSWORD=admin \
   -p 5050:80 \
   dpage/pgadmin4
 ```
 
-#### 4. Ingest Script (Database Initialization)
+#### 2. Initialize Database Schema
 ```bash
-# Build ingest image
+# Create required tables using the initialization script
+docker exec -i chatbot_db psql -U postgres -d chatbot < database/init_schema.sql
+```
+
+#### 3. Load Knowledge Base (PDF Documents)
+```bash
+# Build ingest container
 docker build -t chatbot-ingest ./ingest
 
 # Run ingest script (one-time execution)
@@ -140,8 +117,36 @@ docker run --rm \
   -e DATABASE_URL="postgresql+psycopg://postgres:postgres@host.docker.internal:5432/chatbot" \
   -v "$(pwd)/docs:/docs" \
   chatbot-ingest
+```
 
-# Note: This container runs once and exits after completing the data ingestion
+#### 4. Order API
+```bash
+# Build and run Order API
+docker build -t chatbot-order-api ./order-api
+docker run -d --name chatbot-order-api -p 9000:9000 chatbot-order-api
+
+# Test Order API
+curl -X POST "http://localhost:9000/cancel" \
+  -H "Content-Type: application/json" \
+  -d '{"order_number": "ORD-12345", "reason": "Changed mind"}'
+```
+
+#### 5. Chat API
+```bash
+# Build and run Chat API
+docker build -t chatbot-chat-api ./chat-api
+docker run -d --name chatbot-chat-api \
+  -p 8001:8001 \
+  --network chatbot_genai_default \
+  -e OPENAI_API_KEY="your_openai_api_key_here" \
+  -e DATABASE_URL="postgresql://postgres:postgres@chatbot_db:5432/chatbot" \
+  -e ORDER_API_URL="http://chatbot-order-api:9000/cancel" \
+  chatbot-chat-api
+
+# Test Chat API
+curl -X POST "http://localhost:8001/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "test123", "message": "Merhaba, nasılsınız?"}'
 ```
 
 ### Service URLs
@@ -150,49 +155,45 @@ docker run --rm \
 - **PostgreSQL**: localhost:5432
 - **PgAdmin**: http://localhost:5050
 
-### Database Setup & Initialization
+## 🖥️ Local Development Setup
 
-After starting PostgreSQL, you **must** initialize the database schema and load the knowledge base:
-
-#### 1. Create Database Schema
+### 1. Start Database Services
 ```bash
-# First, create required tables using the initialization script
-cd database
-psql -h localhost -p 5432 -U postgres -d chatbot -f init_schema.sql
-
-# Or if you have PostgreSQL client installed via Docker:
-docker exec -i chatbot_db psql -U postgres -d chatbot < database/init_schema.sql
+docker compose up -d db pgadmin
 ```
 
-#### 2. Load Knowledge Base (PDF Documents)
-
-**Option A: Using Docker (Recommended)**
+### 2. Load Knowledge Base
 ```bash
-# Build ingest container
-docker build -t chatbot-ingest ./ingest
-
-# Run ingest script with volume mount for PDF access
+# Option A: Using Docker
 docker run --rm \
   -e OPENAI_API_KEY="your_openai_api_key_here" \
-  -e DATABASE_URL="postgresql+psycopg://postgres:postgres@host.docker.internal:5432/chatbot" \
+  -e DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5432/chatbot" \
   -v "$(pwd)/docs:/docs" \
   chatbot-ingest
-```
 
-**Option B: Using Python directly**
-```bash
-# Set environment variables for ingest script
+# Option B: Using Python directly
 export OPENAI_API_KEY="your_openai_api_key_here"
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/chatbot"
-
-# Run ingest script to load PDF data into vector database
-cd ingest
-python3 ingest.py
+cd ingest && python3 ingest.py
 ```
 
-#### 3. Verify Database Setup
+### 3. Start Services Locally
 ```bash
-# Connect to database and verify tables
+# Start Order API
+cd order-api
+python3 -m uvicorn order_api:app --reload --port 9000
+
+# Start Chat API (in separate terminal)
+cd chat-api
+export OPENAI_API_KEY="your_openai_api_key_here"
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/chatbot"
+export ORDER_API_URL="http://localhost:9000/cancel"
+python3 -m uvicorn chat_api:app --reload --port 8001
+```
+
+### Database Verification
+```bash
+# Connect to database and verify setup
 psql -h localhost -p 5432 -U postgres -d chatbot
 
 # Check if tables are created
@@ -204,40 +205,10 @@ SELECT COUNT(*) FROM langchain_pg_embedding;
 
 **⚠️ Important**: The Chat API **requires** both the database schema and PDF data to be loaded for full functionality including RAG (Retrieval Augmented Generation).
 
-## 📋 Installation & Setup
-
-### Prerequisites
-- Python 3.8+
-- Docker & Docker Compose
-- OpenAI API Key
-
-### 1. Start Database Services
-```bash
-docker compose up -d
-```
-
-### 2. Load Knowledge Base
-```bash
-python3 ingest.py
-```
-
-### 3. Start Order API Service
-```bash
-python3 -m uvicorn order_api:app --reload --port 9000
-```
-
-### 4. Start Chat API Service
-```bash
-export OPENAI_API_KEY="sk-your-api-key-here"
-export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/chatbot"
-export ORDER_API_URL="http://localhost:9000/cancel"
-python3 -m uvicorn chat_api:app --reload --port 8001
-```
-
 ## 🔗 API Usage
 
 ### Chat Endpoint
-**URL:** `http://127.0.0.1:8001/chat`
+**URL:** `http://localhost:8001/chat`
 **Method:** POST
 
 **Sample Request:**
@@ -252,18 +223,29 @@ python3 -m uvicorn chat_api:app --reload --port 8001
 ```json
 {
   "answer": "I understand you want to cancel your order. Based on our cancellation policy... ✅ Order 12345 has been successfully cancelled. Reason: product is damaged",
-  "sources": ["policy.pdf - chunk 1", "faq.pdf - chunk 3"]
+  "sources": ["Chatbot_SSS.pdf - chunk 1", "Chatbot_SSS.pdf - chunk 3"]
 }
+```
+
+### Health Check
+```bash
+# Check Chat API health
+curl http://localhost:8001/health
+
+# Check Order API  
+curl -X POST http://localhost:9000/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"order_number": "test", "reason": "test"}'
 ```
 
 ## 🏗️ Architecture
 
 ```
 User Request → Chat API → {
-  ├── RAG System (Knowledge Base Search)
+  ├── RAG System (Knowledge Base Search via PGVector)
   ├── Order Processing (Smart Extraction & API Calls)
-  ├── Session Management (Database)
-  └── Response Generation (AI + Context)
+  ├── Session Management (PostgreSQL Database)
+  └── Response Generation (OpenAI GPT-4o-mini + Context)
 }
 ```
 
@@ -277,7 +259,7 @@ User Request → Chat API → {
 ## 🔧 Customization
 
 The system is designed to be easily customizable:
-- **Knowledge Base**: Add your own documents to the `docs/` folder
+- **Knowledge Base**: Add your own documents to the `docs/` folder and run ingest
 - **Order API**: Modify `order_api.py` to integrate with your order management system
 - **Language Support**: Adjust prompts and regex patterns for different languages
 - **AI Model**: Configure different OpenAI models based on your needs
@@ -287,6 +269,17 @@ The system is designed to be easily customizable:
 - **Session Tracking**: All conversations are logged with session IDs
 - **Action Logging**: Order cancellations and other actions are tracked
 - **Source Attribution**: Track which documents are most helpful
+- **Error Handling**: Clear error messages when database or vector data is unavailable
+
+## 🚀 Production Deployment
+
+For production deployment:
+1. Use environment variables for all sensitive data
+2. Set up proper database backups
+3. Configure monitoring and logging
+4. Use Docker secrets for API keys
+5. Set up SSL/TLS for external access
+6. Consider horizontal scaling with load balancers
 
 ---
 
