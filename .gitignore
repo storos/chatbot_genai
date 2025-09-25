@@ -143,4 +143,5 @@ cython_debug/
 *.log
 nohup.out
 apikey.txt
+eks-admin_accessKeys.csv
 chat-ui/node_modules/
