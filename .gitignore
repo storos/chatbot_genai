@@ -144,4 +144,5 @@ cython_debug/
 nohup.out
 apikey.txt
 eks-admin_accessKeys.csv
+.DS_Store
 chat-ui/node_modules/
