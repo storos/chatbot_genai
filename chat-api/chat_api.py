@@ -66,6 +66,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[str]
+    tool_calls: list[dict] = []  # Tool calling bilgileri
 
 # ==============================
 # Helper DB Functions
@@ -103,7 +104,7 @@ def get_session_history(session_id: str):
     return [{"role": r, "content": c} for r, c in rows]
 
 def assistant_recently_asked_for_details(session_id: str) -> bool:
-    """Son asistan mesajı sipariş no + sebep istiyor mu? Basit heuristik."""
+    """Son asistan mesajı sipariş iptal detayları istiyor mu?"""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -115,25 +116,59 @@ def assistant_recently_asked_for_details(session_id: str) -> bool:
         )
         row = cur.fetchone()
     if not row:
+        print("DEBUG: No assistant message found")
         return False
     txt = row[0].lower()
-    return ("sipariş numaranız" in txt or "sipariş numarasını" in txt) and ("iptal nedenini" in txt or "sebep" in txt)
+    print(f"DEBUG: Last assistant message: '{txt[:100]}...'")
+    
+    # Eğer son mesaj başarılı iptal mesajıysa, artık detay isteme modunda değiliz
+    if "başarıyla iptal edildi" in txt or "✅" in txt:
+        print("DEBUG: Last message was successful cancellation, not asking for details anymore")
+        return False
+    
+    has_order = ("sipariş numaranız" in txt or "sipariş numarasını" in txt or "sipariş" in txt)
+    has_reason = ("iptal nedenini" in txt or "sebep" in txt or "nedeni" in txt)
+    has_iptal = ("iptal işlemi" in txt or "işlemi" in txt or "iptal" in txt)
+    print(f"DEBUG: has_order={has_order}, has_reason={has_reason}, has_iptal={has_iptal}")
+    result = (has_order or has_reason) and has_iptal
+    print(f"DEBUG: Final result: {result}")
+    return result
 
 # ==============================
 # Tool: Call Order API
 # ==============================
-def call_order_api(order_number: str, reason: str) -> str:
+def call_order_api(order_number: str, reason: str) -> tuple[str, dict]:
+    """Order API'yi çağır ve sonuç + detayları döndür"""
+    tool_info = {
+        "tool_name": "cancel_order",
+        "endpoint": f"{ORDER_API_URL}/cancel",
+        "method": "POST",
+        "request_data": {"order_number": order_number, "reason": reason},
+        "response_status": None,
+        "response_data": None,
+        "error": None
+    }
+    
     try:
         resp = requests.post(
-            ORDER_API_URL,
+            f"{ORDER_API_URL}/cancel",
             json={"order_number": order_number, "reason": reason},
             timeout=8,
         )
+        tool_info["response_status"] = resp.status_code
+        
         if resp.status_code == 204:
-            return f"✅ Sipariş {order_number} başarıyla iptal edildi. Sebep: {reason}"
-        return f"❌ Sipariş iptal edilemedi. Status: {resp.status_code}, Response: {resp.text}"
+            tool_info["response_data"] = "Order cancelled successfully"
+            result = f"✅ Sipariş {order_number} başarıyla iptal edildi. Sebep: {reason}"
+        else:
+            tool_info["response_data"] = resp.text
+            result = f"❌ Sipariş iptal edilemedi. Status: {resp.status_code}, Response: {resp.text}"
+            
     except Exception as e:
-        return f"❌ Sipariş iptalinde hata: {str(e)}"
+        tool_info["error"] = str(e)
+        result = f"❌ Sipariş iptalinde hata: {str(e)}"
+    
+    return result, tool_info
 
 # ==============================
 # Parsing helpers
@@ -152,11 +187,50 @@ def extract_order_and_reason(message: str):
     if m_reason:
         reason = m_reason.group(1).strip()
     else:
-        # Diğer sebep ifadeleri
-        m_alt = re.search(r"(hasarlı|bozuk|iade|yanlış|defolu|beğenmedim|uygun değil|fikrim değişti|fikir değiştirdim|istemiyorum|artık gerek yok)", message, re.IGNORECASE)
+        # Diğer sebep ifadeleri - eğer mesaj sadece sebep kelimesi ise, tümünü sebep olarak al
+        m_alt = re.search(r"(hasarlı|bozuk|iade|yanlış|defolu|beğenmedim|uygun değil|fikrim değişti|fikir değiştirdim|istemiyorum|artık gerek yok|kalitesiz|kötü|iyi değil)", message, re.IGNORECASE)
         if m_alt:
             reason = m_alt.group(1)
+        elif (len(message.strip().split()) <= 3 and 
+              not re.match(r'^\d+$', message.strip()) and
+              not any(word in message.lower() for word in ['sipariş', 'numara', 'order', 'number'])):  # Sipariş numarası ifadelerini hariç tut
+            reason = message.strip()
 
+    return order_number, reason
+
+def get_session_context_for_order(session_id: str):
+    """Session'daki tüm user mesajlarından order_number ve reason bilgilerini topla"""
+    order_number = None
+    reason = None
+    
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT content FROM chat_messages
+            WHERE session_id = %s AND role = 'user'
+            ORDER BY created_at DESC LIMIT 10
+            """,
+            (session_id,),
+        )
+        rows = cur.fetchall()
+    
+    # En son mesajlardan order_number ve reason ara
+    for row in rows:
+        content = row[0]
+        msg_order, msg_reason = extract_order_and_reason(content)
+        
+        if msg_order and not order_number:
+            order_number = msg_order
+        # Reason geçerli mi kontrol et (sadece rakam olmamalı, iptal/selamlama kelimeleri içermemeli)
+        if (msg_reason and not reason and 
+            not re.match(r'^\d+$', msg_reason.strip()) and 
+            not any(word in msg_reason.lower() for word in ['iptal', 'merhaba', 'selam', 'hello', 'hi', 'iyi günler', 'günaydın'])):
+            reason = msg_reason
+            
+        # Her ikisi de bulunduysa dur
+        if order_number and reason:
+            break
+    
     return order_number, reason
 
 # ==============================
@@ -176,26 +250,45 @@ def chat_endpoint(req: ChatRequest):
 
     # ---- Tool Calling: Sipariş İptal İşlemi ----
     order_number, reason = extract_order_and_reason(req.message)
+    print(f"DEBUG: Current message - order_number: {order_number}, reason: {reason}")
+    
+    # Eğer current mesajda eksik bilgi varsa, session context'ten tamamlamaya çalış
+    if not order_number or not reason:
+        context_order, context_reason = get_session_context_for_order(req.session_id)
+        print(f"DEBUG: Session context - order_number: {context_order}, reason: {context_reason}")
+        if not order_number:
+            order_number = context_order
+        if not reason:
+            reason = context_reason
+    
+    print(f"DEBUG: Final - order_number: {order_number}, reason: {reason}")
+    print(f"DEBUG: assistant_recently_asked_for_details: {assistant_recently_asked_for_details(req.session_id)}")
     
     # 1) Eğer önceki asistan iptal bilgilerini istemişse ve şimdi bilgiler geliyorsa → direkt iptal et
-    if assistant_recently_asked_for_details(req.session_id) and order_number and reason:
-        result = call_order_api(order_number, reason)
-        save_action(req.session_id, "cancel_order", {"order_number": order_number, "reason": reason}, result)
+    # Current reason MEVCUT mesajdan gelmeli, order number session'dan olabilir
+    current_order, current_reason = extract_order_and_reason(req.message)
+    final_order = current_order if current_order else order_number  # Session'dan da olabilir
+    if (assistant_recently_asked_for_details(req.session_id) and 
+        final_order and current_reason and 
+        not re.match(r'^\d+$', current_reason.strip())):
+        result, tool_info = call_order_api(final_order, current_reason)
+        save_action(req.session_id, "cancel_order", {"order_number": final_order, "reason": current_reason}, result)
         save_message(req.session_id, "assistant", result)
-        return ChatResponse(answer=result, sources=[])
+        return ChatResponse(answer=result, sources=[], tool_calls=[tool_info])
     
     # 2) Eğer önceki asistan iptal bilgilerini istemişse ve hala eksik bilgi varsa → tekrar sor
     if assistant_recently_asked_for_details(req.session_id):
         missing = []
-        if not order_number:
+        final_order = current_order if current_order else order_number  # Session'dan da olabilir
+        if not final_order:
             missing.append("sipariş numarası")
-        if not reason:
+        if not current_reason:
             missing.append("sebep")
         if missing:
             ask = " ve ".join(missing)
             answer = f"İptal işlemi için {ask} bilgisini paylaşır mısınız?"
             save_message(req.session_id, "assistant", answer)
-            return ChatResponse(answer=answer, sources=[])
+            return ChatResponse(answer=answer, sources=[], tool_calls=[])
 
     # ---- Vector Database RAG ----
     history = get_session_history(req.session_id)
@@ -218,14 +311,14 @@ def chat_endpoint(req: ChatRequest):
             # If no relevant docs found, return error message
             error_msg = "⚠️ Üzgünüm, şu anda sistem bilgi bankasında veri bulunmuyor. Lütfen daha sonra tekrar deneyin veya müşteri hizmetleri ile iletişime geçin."
             save_message(req.session_id, "assistant", error_msg)
-            return ChatResponse(answer=error_msg, sources=[])
+            return ChatResponse(answer=error_msg, sources=[], tool_calls=[])
             
     except Exception as e:
         print(f"Vector search error: {e}")
         # Return error message for database issues
         error_msg = "⚠️ Üzgünüm, şu anda sistem veritabanına erişimde sorun yaşanıyor. Lütfen daha sonra tekrar deneyin veya müşteri hizmetleri ile iletişime geçin."
         save_message(req.session_id, "assistant", error_msg)
-        return ChatResponse(answer=error_msg, sources=[])
+        return ChatResponse(answer=error_msg, sources=[], tool_calls=[])
 
     prompt = f"""
 Sen bir müşteri destek asistanısın. Türkçe yanıt ver.
@@ -253,7 +346,7 @@ Cevabını sadece Türkçe ver ve yardımcı ol.
         answer += "\n\nEğer isterseniz buradan sipariş numaranızı ve iptal nedeninizi paylaşırsanız, ben de iptal işleminizi gerçekleştirebilirim."
     
     save_message(req.session_id, "assistant", answer)
-    return ChatResponse(answer=answer, sources=sources)
+    return ChatResponse(answer=answer, sources=sources, tool_calls=[])
 
 if __name__ == "__main__":
     import uvicorn

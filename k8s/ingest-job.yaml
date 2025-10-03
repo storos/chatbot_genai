@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chatbot-ingest
+  namespace: chatbot
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: ingest
+        image: 412200680627.dkr.ecr.eu-central-1.amazonaws.com/chatbot-ingest:v3
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-secret
+              key: api-key
+        - name: DATABASE_URL
+          value: "postgresql+psycopg://postgres:postgres@postgres-service.chatbot.svc.cluster.local:5432/chatbot"
+        volumeMounts:
+        - name: docs-volume
+          mountPath: /app/docs
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: docs-volume
+        configMap:
+          name: docs-configmap

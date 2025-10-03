@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import axios from 'axios';
 import { ChatMessage, ChatRequest, ChatResponse } from '../types/chat';
 
-const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || 'http://localhost:8001';
+const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || '/api';
 
 export const useChat = (sessionId: string) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -42,6 +42,7 @@ export const useChat = (sessionId: string) => {
         content: response.data.answer,
         timestamp: new Date(),
         sources: response.data.sources,
+        tool_calls: response.data.tool_calls,
       };
 
       setMessages(prev => [...prev, assistantMessage]);

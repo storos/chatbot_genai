@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-ui
+  namespace: chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chat-ui
+  template:
+    metadata:
+      labels:
+        app: chat-ui
+    spec:
+      containers:
+      - name: chat-ui
+        image: 412200680627.dkr.ecr.eu-central-1.amazonaws.com/chatbot-ui:v2.1
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        env:
+        - name: VITE_CHAT_API_URL
+          value: "/api/chat"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-ui-service
+  namespace: chatbot
+spec:
+  selector:
+    app: chat-ui
+  ports:
+    - port: 80
+      targetPort: 3000
+  type: ClusterIP

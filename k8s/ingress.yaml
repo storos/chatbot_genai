@@ -1,0 +1,63 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chatbot-frontend-ingress
+  namespace: chatbot
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+  - http:
+      paths:
+      # Static assets first - no rewrite needed
+      - path: /assets
+        pathType: Prefix
+        backend:
+          service:
+            name: chat-ui-service
+            port:
+              number: 80
+      - path: /vite.svg
+        pathType: Prefix
+        backend:
+          service:
+            name: chat-ui-service
+            port:
+              number: 80
+      # Frontend default - must be last
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: chat-ui-service
+            port:
+              number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chatbot-api-ingress
+  namespace: chatbot
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /chat
+spec:
+  rules:
+  - http:
+      paths:
+      # API routes with rewrite
+      - path: /api/chat
+        pathType: Exact
+        backend:
+          service:
+            name: chat-api-service
+            port:
+              number: 8001
+      - path: /api/order(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: order-api-service
+            port:
+              number: 9000
